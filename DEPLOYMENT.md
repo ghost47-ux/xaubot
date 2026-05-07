@@ -240,7 +240,7 @@ streamlit run dashboard/app.py
 - Critic layer disabled if missing
 
 **"No candle data"**
-- Check TWELVEDATA_API_KEY or MetaTrader5 connection
+- Check TWELVE_DATA_API_KEY and internet connectivity
 - Verify internet connectivity
 
 **"Parity BREACH"**

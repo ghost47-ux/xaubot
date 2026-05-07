@@ -1,10 +1,11 @@
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import streamlit as st
-from state.models import BotState
+from state.models import BotState, SignalType, CriticOutput
 
 LOG_FILE = Path(os.getcwd()) / 'logs' / 'decisions.jsonl'
 
@@ -22,24 +23,6 @@ def load_logs() -> List[Dict]:
     return entries
 
 
-def filter_logs(logs: List[Dict], signal_type: Optional[str], edge_source: Optional[str]) -> List[Dict]:
-    filtered = logs
-    if signal_type:
-        filtered = [entry for entry in filtered if entry.get('signal_type') == signal_type]
-    if edge_source:
-        filtered = [entry for entry in filtered if entry.get('edge_source') == edge_source]
-    return filtered
-
-
-def _build_performance_frame(logs: List[Dict]) -> Dict[str, List]:
-    return {
-        'e1_rolling_ev': [entry.get('e1_rolling_ev') for entry in logs if entry.get('e1_rolling_ev') is not None],
-        'e1_rolling_wr': [entry.get('e1_rolling_wr') for entry in logs if entry.get('e1_rolling_wr') is not None],
-        'e2_rolling_ev': [entry.get('e2_rolling_ev') for entry in logs if entry.get('e2_rolling_ev') is not None],
-        'e2_rolling_wr': [entry.get('e2_rolling_wr') for entry in logs if entry.get('e2_rolling_wr') is not None],
-    }
-
-
 def _ensure_session_state() -> None:
     if 'bot_state' not in st.session_state:
         st.session_state['bot_state'] = BotState(timestamp=datetime.now(timezone.utc))
@@ -55,104 +38,158 @@ def run_analysis() -> None:
     bot_state: BotState = st.session_state['bot_state']
     trade_log: List[dict] = st.session_state['trade_log']
 
-    try:
-        signal_text, metadata = run_cycle(bot_state, trade_log, return_metadata=True)
-        st.session_state['analysis_result'] = {
-            'signal_text': signal_text,
-            'metadata': metadata,
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
-        st.success('Analysis cycle completed successfully.')
-    except Exception as exc:
-        st.session_state['analysis_result'] = {
-            'error': str(exc),
-            'timestamp': datetime.now(timezone.utc).isoformat()
-        }
-        st.error(f'Analysis failed: {exc}')
+    with st.status("Running Analysis Cycle...", expanded=True) as status:
+        st.write("Fetching 1H candles...")
+        st.write("Fetching M15 candles...")
+        st.write("Calculating indicators...")
+        st.write("Detecting Edge 1...")
+        st.write("Detecting Edge 2...")
+        st.write("Applying overlap rules...")
+        st.write("Assessing risk...")
+        st.write("Checking parity...")
+        st.write("Detecting drift...")
+        st.write("Calling Claude Critic...")
+        st.write("Formatting signal...")
+
+        try:
+            signal_text, metadata = run_cycle(bot_state, trade_log, return_metadata=True)
+            st.session_state['analysis_result'] = {
+                'signal_text': signal_text,
+                'metadata': metadata,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }
+            status.update(label="Analysis Complete!", state="complete")
+        except Exception as exc:
+            st.session_state['analysis_result'] = {
+                'error': str(exc),
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }
+            status.update(label="Analysis Failed", state="error")
+
+
+def display_signal_card(signal_type: str, metadata: Dict) -> None:
+    if signal_type == SignalType.TRADE.value:
+        st.success("🚀 TRADE SIGNAL")
+        edge_source = metadata.get('edge_source', 'NONE')
+        if 'EDGE1' in edge_source:
+            with st.container():
+                st.subheader("Edge 1: Trend Pullback")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Direction", metadata.get('direction', 'N/A'))
+                    st.metric("Entry Price", f"${metadata.get('entry_price', 0):.2f}")
+                with col2:
+                    st.metric("Stop Loss", f"${metadata.get('stop_loss', 0):.2f}")
+                    st.metric("Take Profit", f"${metadata.get('take_profit', 0):.2f}")
+        if 'EDGE2' in edge_source:
+            with st.container():
+                st.subheader("Edge 2: Breakout")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Direction", metadata.get('direction', 'N/A'))
+                    st.metric("Breakout Class", metadata.get('e2_breakout_class', 'N/A'))
+                with col2:
+                    st.metric("Entry Price", f"${metadata.get('entry_price', 0):.2f}")
+                    st.metric("Stop Loss", f"${metadata.get('stop_loss', 0):.2f}")
+    elif signal_type == SignalType.WATCH.value:
+        st.warning("👀 WATCH MODE - Compression Zone Active")
+    else:
+        st.info("⏸️ NO TRADE")
+
+
+def display_critic_output(metadata: Dict) -> None:
+    st.subheader("🤖 Claude Critic Analysis")
+    if not metadata.get('critic_called', False):
+        st.info("Critic not called for this cycle.")
+        return
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Contradictions:**")
+        for contra in metadata.get('critic_contradictions', ['None.']):
+            st.write(f"• {contra}")
+        st.markdown("**Confirmations:**")
+        for conf in metadata.get('critic_confirmations', ['None.']):
+            st.write(f"• {conf}")
+    with col2:
+        st.markdown("**Context Notes:**")
+        for note in metadata.get('critic_context_notes', ['None.']):
+            st.write(f"• {note}")
+
+    with st.expander("Raw Critic Text"):
+        st.code(metadata.get('critic_raw_text', 'N/A'))
+
+
+def display_state_management(bot_state: BotState) -> None:
+    st.subheader("⚙️ Bot State Management")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("E1 Trades Today", bot_state.e1_trades_today)
+        st.metric("E2 Trades Today", bot_state.e2_trades_today)
+    with col2:
+        st.metric("Last Reset Date", bot_state.last_reset_date or "None")
+        if st.button("Reset Daily Counters"):
+            bot_state.e1_trades_today = 0
+            bot_state.e2_trades_today = 0
+            bot_state.last_reset_date = datetime.now(timezone.utc).date().isoformat()
+            st.success("Counters reset!")
+    with col3:
+        st.metric("Regime History Length", len(bot_state.regime_history))
+        if st.button("Clear Regime History"):
+            bot_state.regime_history = []
+            st.success("History cleared!")
 
 
 def main():
     st.set_page_config(page_title='XAU/USD Signal Monitor', layout='wide')
     st.title('XAU/USD Analysis Dashboard')
-    st.markdown('Cloud-friendly analysis dashboard. Runs live analysis cycles and displays detailed signal output. No MetaTrader5 dependency required.')
+    st.markdown('Fully functional management console for the XAU/USD trading bot. No MetaTrader5 dependency.')
 
     _ensure_session_state()
 
     with st.sidebar:
-        st.header('Dashboard Controls')
-        st.write('Trigger a live analysis cycle and inspect full output details.')
-        if st.button('Run analysis now'):
+        st.header('Controls')
+        if st.button('🚀 Run Analysis', type='primary'):
             run_analysis()
 
         st.markdown('---')
-        st.write('Streamlit Cloud deployment requires:')
-        st.write('- `TWELVEDATA_API_KEY` for live candle data')
-        st.write('- internet access to Twelvedata API')
-        st.write('- optional cached candles in `data/candles/` for offline replay')
-
-        st.markdown('---')
-        signal_type = st.selectbox('Signal type', ['ALL', 'TRADE', 'WATCH', 'NO_TRADE'])
-        edge_source = st.selectbox('Edge source', ['ALL', 'EDGE1', 'EDGE2', 'NONE'])
-        if st.button('Refresh logs'):
-            st.experimental_rerun()
-
-        st.markdown('---')
-        st.write('Auto-refresh will keep the latest logs visible.')
-        st_autorefresh = getattr(st, 'autorefresh', None)
-        if callable(st_autorefresh):
-            st_autorefresh(interval=60000, limit=None, key='dashboard_refresh')
+        st.subheader('Requirements')
+        st.write('• `TWELVE_DATA_API_KEY` in Streamlit secrets')
+        st.write('• Internet access for live data')
 
     analysis_result = st.session_state['analysis_result']
     if analysis_result.get('error'):
-        st.error(analysis_result['error'])
+        st.error(f"Analysis Error: {analysis_result['error']}")
 
     if analysis_result.get('signal_text'):
-        st.subheader('Latest triggered analysis')
-        st.code(analysis_result['signal_text'])
-        with st.expander('Show full analysis metadata'):
-            st.json(analysis_result['metadata'])
-        st.markdown(f"**Last analysis run:** {analysis_result['timestamp']}")
+        st.subheader('📊 Latest Analysis Result')
+        metadata = analysis_result['metadata']
+        signal_type = metadata.get('signal_type', 'NO_TRADE')
 
+        # Signal Card
+        display_signal_card(signal_type, metadata)
+
+        # Critic Output
+        display_critic_output(metadata)
+
+        # State Management
+        display_state_management(st.session_state['bot_state'])
+
+        st.markdown(f"**Analysis Timestamp:** {analysis_result['timestamp']}")
+
+    # Logs Section
     st.markdown('---')
-    st.subheader('Current live logs')
+    st.subheader('📋 Recent Logs')
     logs = load_logs()
-    filtered_logs = logs
-    if signal_type != 'ALL':
-        filtered_logs = filter_logs(filtered_logs, signal_type, None)
-    if edge_source != 'ALL':
-        filtered_logs = filter_logs(filtered_logs, None, edge_source)
-
-    if filtered_logs:
-        latest = filtered_logs[-1]
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.markdown('#### Current signal from logs')
-            st.code(latest.get('formatted_signal_text') or latest.get('critic_raw_text') or 'No signal text available.')
-            st.markdown('#### System health snapshot')
-            st.markdown(f"- **Drift severity:** {latest.get('drift_severity', 'N/A')}")
-            st.markdown(f"- **Parity status:** {latest.get('parity_status', 'N/A')}")
-            st.markdown(f"- **Active drift flags:** {latest.get('drift_flag_types', [])}")
-            st.markdown(f"- **E2 OOS count:** {latest.get('e2_oos_trade_count', 0)} / 20")
-            st.markdown(f"- **Phase 11 caveat active:** {latest.get('phase11_caveat_active', False)}")
-        with col2:
-            st.markdown('#### Performance charts')
-            perf = _build_performance_frame(filtered_logs[-50:])
-            if perf['e1_rolling_ev']:
-                st.line_chart({'Edge 1 EV': perf['e1_rolling_ev']})
-            if perf['e1_rolling_wr']:
-                st.line_chart({'Edge 1 WR': perf['e1_rolling_wr']})
-            if perf['e2_rolling_ev']:
-                st.line_chart({'Edge 2 EV': perf['e2_rolling_ev']})
-            if perf['e2_rolling_wr']:
-                st.line_chart({'Edge 2 WR': perf['e2_rolling_wr']})
-
-        st.markdown('---')
-        st.subheader('Log viewer')
-        display_logs = filtered_logs[-50:][::-1]
-        st.dataframe(display_logs)
+    if logs:
+        latest = logs[-1]
+        st.json(latest)
     else:
-        st.info('No logs available yet. Trigger analysis to generate the first signal.')
+        st.info('No logs yet. Run analysis to generate signals.')
 
 
 if __name__ == '__main__':
     main()
+
+LOG_FILE = Path(os.getcwd()) / 'logs' / 'decisions.jsonl'
+

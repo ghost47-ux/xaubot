@@ -13,7 +13,7 @@ except ImportError:
     pass
 
 from config import settings
-from data import fetcher
+from data import loader
 from drift.detector import detect_drift
 from edges.edge1.detector import detect_edge1
 from edges.edge2.detector import detect_edge2, detect_compression_zones
@@ -38,23 +38,11 @@ def _get_data_dir() -> Path:
 
 def _load_candle_file(path: str, symbol: str, interval: str, n_bars: int):
     """Load candle data from file or API."""
-    data_dir = _get_data_dir()
-    abs_path = data_dir / path
-    
-    # Ensure directory exists
-    abs_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    if abs_path.exists():
-        try:
-            df = fetcher.load_parquet(str(abs_path))
-            if fetcher.validate_candles(df):
-                return df
-        except Exception as e:
-            logger.warning(f'Failed to load candles from {abs_path}: {e}')
-    
-    # Fetch from API
-    df = fetcher.get_candles(symbol, interval, n_bars)
-    fetcher.save_parquet(df, str(abs_path))
+    # Use loader which handles caching and API fetching
+    df = loader.load_candles(symbol, interval, n_bars)
+    if df.empty or not loader.validate_candles(df):
+        logger.warning('Invalid or empty candle data for %s %s', symbol, interval)
+        return df  # Return empty to trigger NO_TRADE
     return df
 
 
@@ -80,7 +68,7 @@ def run_cycle(bot_state: BotState, trade_log: List[dict], return_metadata: bool 
     df_1h = _load_candle_file('candles/xauusd_1h.parquet', 'XAU/USD', '1h', 250)
     df_m15 = _load_candle_file('candles/xauusd_m15.parquet', 'XAU/USD', '15min', 500)
 
-    if not fetcher.validate_candles(df_1h) or not fetcher.validate_candles(df_m15):
+    if not loader.validate_candles(df_1h) or not loader.validate_candles(df_m15):
         signal_text = format_signal(SignalType.NO_TRADE.value, None, None, None, bot_state=bot_state)
         log_cycle({'timestamp_utc': datetime.now(timezone.utc).isoformat(), 'signal_type': SignalType.NO_TRADE.value})
         return signal_text

@@ -1,6 +1,6 @@
 anthropic>=0.25.0
 pandas>=2.0.0,<3.0.0
-MetaTrader5==5.0.47
+twelvedata>=1.2.0
 pyarrow>=10.0.0
 requests>=2.32.5
 streamlit>=1.0.0
