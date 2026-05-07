@@ -3,20 +3,27 @@ import time
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
-import streamlit as st
 
 import pandas as pd
 import requests
+
+logger = logging.getLogger(__name__)
+
+# Try to import Streamlit (optional, only used in dashboard)
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
+    st = None
+
+# Try to import Twelve Data
 try:
     from twelvedata import TDClient
     TWELVEDATA_AVAILABLE = True
 except ImportError:
     TWELVEDATA_AVAILABLE = False
     TDClient = None
-
-from config import settings
-
-logger = logging.getLogger(__name__)
 
 class TwelveDataClient:
     def __init__(self, api_key: str):
@@ -74,22 +81,46 @@ class TwelveDataClient:
             # Return empty DataFrame to prevent crashes
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_cached_candles(symbol: str, interval: str, n_bars: int) -> pd.DataFrame:
-    """Cached wrapper for candle fetching."""
-    # Try Streamlit secrets first, then env
-    api_key = None
-    try:
-        api_key = st.secrets.get("TWELVE_DATA_API_KEY")
-    except:
-        pass
-    if not api_key:
-        api_key = os.environ.get('TWELVE_DATA_API_KEY') or os.environ.get('TWELVEDATA_API_KEY')
-    if not api_key:
-        raise RuntimeError('Twelve Data API key not found. Set TWELVE_DATA_API_KEY in secrets or environment.')
+def _fetch_from_api(symbol: str, interval: str, n_bars: int) -> pd.DataFrame:
+    """Fetch candles from Twelve Data API."""
+    if not TWELVEDATA_AVAILABLE:
+        logger.warning('Twelve Data package not available')
+        return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-    client = TwelveDataClient(api_key)
-    return client.fetch_candles(symbol, interval, n_bars)
+    try:
+        api_key = None
+        
+        # Try Streamlit secrets first, then env
+        if STREAMLIT_AVAILABLE:
+            try:
+                api_key = st.secrets.get("TWELVE_DATA_API_KEY")
+            except:
+                pass
+        
+        if not api_key:
+            api_key = os.environ.get('TWELVE_DATA_API_KEY') or os.environ.get('TWELVEDATA_API_KEY')
+        
+        if not api_key:
+            logger.error('Twelve Data API key not found')
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+        client = TwelveDataClient(api_key)
+        return client.fetch_candles(symbol, interval, n_bars)
+    except Exception as exc:
+        logger.error('API fetch failed: %s', exc)
+        return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+
+# Conditional caching: only use Streamlit cache if available
+if STREAMLIT_AVAILABLE:
+    @st.cache_data(ttl=300)
+    def get_cached_candles(symbol: str, interval: str, n_bars: int) -> pd.DataFrame:
+        """Cached wrapper for candle fetching (Streamlit context)."""
+        return _fetch_from_api(symbol, interval, n_bars)
+else:
+    def get_cached_candles(symbol: str, interval: str, n_bars: int) -> pd.DataFrame:
+        """Non-cached wrapper for candle fetching (regular Python context)."""
+        return _fetch_from_api(symbol, interval, n_bars)
 
 def validate_candles(df: pd.DataFrame) -> bool:
     """Validate candle DataFrame has required columns and is well-formed."""
@@ -111,3 +142,25 @@ def validate_candles(df: pd.DataFrame) -> bool:
         return False
 
     return True
+
+
+def load_candles(symbol: str, interval: str, n_bars: int) -> pd.DataFrame:
+    """Main function to load candles, preferring cache but falling back to API."""
+    # Try to load from local cache first
+    cache_path = f"data/candles/{symbol.replace('/', '')}_{interval}.parquet"
+    if os.path.exists(cache_path):
+        try:
+            df = pd.read_parquet(cache_path)
+            if len(df) >= n_bars:
+                logger.info('Loaded %d candles from cache for %s %s', len(df), symbol, interval)
+                return df.tail(n_bars)  # Return latest n_bars
+        except Exception as e:
+            logger.warning('Failed to load cached candles: %s', e)
+
+    # Fetch from API
+    df = get_cached_candles(symbol, interval, n_bars)
+    if not df.empty:
+        # Save to cache
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        df.to_parquet(cache_path, index=False)
+    return df

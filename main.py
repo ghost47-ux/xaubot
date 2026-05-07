@@ -252,5 +252,8 @@ def main_loop():
     print(signal_text)
 
 
+# Only execute as CLI when explicitly run, not when imported by Streamlit
 if __name__ == '__main__':
-    main_loop()
+    # Extra safety: don't run if STREAMLIT_SERVER_HEADLESS is set (Streamlit execution)
+    if not os.environ.get('STREAMLIT_SERVER_HEADLESS'):
+        main_loop()
