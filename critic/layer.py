@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -7,20 +8,29 @@ from config import settings
 from critic.prompt import CRITIC_SYSTEM_PROMPT
 from state.models import CriticOutput, DriftState, ParityState, SignalType
 
+# Decision words that indicate action/recommendation. Must be checked with word boundaries.
 DECISION_WORDS = [
     'take', 'skip', 'avoid', 'recommend', 'suggest', 'should',
-    "don't", 'dont', 'enter', 'wait', 'pass', 'hold off',
-    'reconsider', 'think twice', 'be careful', 'caution advised',
-    'i would', 'you might', 'consider', 'perhaps', 'maybe'
+    'enter', 'wait', 'pass', 'reconsider', 'be careful',
+    'i would', 'you might', 'consider'
 ]
 
 
 def validate_critic_output(raw_text: str) -> Tuple[bool, List[str]]:
+    """
+    Check if critic output contains decision language (prohibited).
+    Uses word boundary regex to avoid false positives like 'consideration'.
+    Returns (is_valid, found_words)
+    """
     found = []
     lower = raw_text.lower()
+    
     for word in DECISION_WORDS:
-        if word in lower:
+        # Build regex pattern with word boundaries
+        pattern = r'\b' + re.escape(word) + r'\b'
+        if re.search(pattern, lower):
             found.append(word)
+    
     return (len(found) == 0, found)
 
 
@@ -147,16 +157,27 @@ def call_critic(context: dict) -> CriticOutput:
 
     try:
         import anthropic
-        client = anthropic.Client(api_key)
-        response = client.completions.create(
+        client = anthropic.Anthropic(api_key=api_key)
+        
+        context_str = json.dumps(context, default=str)
+        
+        response = client.messages.create(
             model=settings.CRITIC_MODEL,
-            max_tokens_to_sample=settings.CRITIC_MAX_TOKENS,
+            max_tokens=settings.CRITIC_MAX_TOKENS,
             temperature=settings.CRITIC_TEMPERATURE,
-            prompt=f"\n\nHuman: {json.dumps(context, default=str)}\n\nAssistant:",
+            system=CRITIC_SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Analyze this signal context:\n\n{context_str}"
+                }
+            ]
         )
-        raw_text = response.completion
+        
+        raw_text = response.content[0].text
         is_bounded, found_words = validate_critic_output(raw_text)
         contradictions, confirmations, drift_flags, context_notes = parse_critic_sections(raw_text)
+        
         return CriticOutput(
             timestamp=timestamp,
             critic_called=True,
@@ -168,7 +189,7 @@ def call_critic(context: dict) -> CriticOutput:
             parity_flags_in_context=parity_flags_from_context(context),
             context_notes=context_notes,
             raw_critic_text=raw_text,
-            tokens_used=getattr(response, 'token_count', 0),
+            tokens_used=response.usage.output_tokens,
             output_bounded=is_bounded,
             decision_words_found=found_words
         )
