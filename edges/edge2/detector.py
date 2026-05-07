@@ -81,7 +81,14 @@ def detect_edge2(df_m15: pd.DataFrame,
         logger.info('E2 rejected — daily limit reached: %s', bot_state.e2_trades_today)
         return None
 
-    valid_zones = [z for z in compression_zones if z.end_bar < current_bar and not getattr(z, 'used', False)]
+    # Track used zones using a set in bot_state
+    if not hasattr(bot_state, '_used_zone_ids'):
+        bot_state._used_zone_ids = set()
+    
+    valid_zones = [
+        z for z in compression_zones 
+        if z.end_bar < current_bar and id(z) not in bot_state._used_zone_ids
+    ]
     if not valid_zones:
         bot_state.e2_reject_reason = 'No valid compression zone found'
         logger.info('E2 rejected — no valid compression zone found')
@@ -117,7 +124,8 @@ def detect_edge2(df_m15: pd.DataFrame,
     timeout_bar = current_bar + settings.E2_TIMEOUT_BARS
     dollar_risk = stop_distance * settings.USD_PER_POINT
 
-    zone.used = True
+    # Mark zone as used (non-mutating: use id tracking)
+    bot_state._used_zone_ids.add(id(zone))
 
     return Edge2Signal(
         timestamp=current_row['timestamp'],

@@ -1,6 +1,16 @@
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional
+import logging
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent / '.env'
+    load_dotenv(env_path)
+except ImportError:
+    pass
 
 from config import settings
 from data import fetcher
@@ -15,14 +25,36 @@ from analytics.logger import log_cycle, update_performance_metrics
 from critic.layer import build_critic_context, call_critic
 from state.models import BotState, CriticOutput, ParityState, DriftState, DriftSeverity, ParityStatus, SignalType
 
+logger = logging.getLogger(__name__)
+
+
+def _get_data_dir() -> Path:
+    """Get the data directory, using env var or default to project root."""
+    data_dir = os.environ.get('DATA_DIR')
+    if data_dir:
+        return Path(data_dir)
+    return Path(__file__).parent / 'data'
+
 
 def _load_candle_file(path: str, symbol: str, interval: str, n_bars: int):
-    if os.path.exists(path):
-        df = fetcher.load_parquet(path)
-        if fetcher.validate_candles(df):
-            return df
+    """Load candle data from file or API."""
+    data_dir = _get_data_dir()
+    abs_path = data_dir / path
+    
+    # Ensure directory exists
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if abs_path.exists():
+        try:
+            df = fetcher.load_parquet(str(abs_path))
+            if fetcher.validate_candles(df):
+                return df
+        except Exception as e:
+            logger.warning(f'Failed to load candles from {abs_path}: {e}')
+    
+    # Fetch from API
     df = fetcher.get_candles(symbol, interval, n_bars)
-    fetcher.save_parquet(df, path)
+    fetcher.save_parquet(df, str(abs_path))
     return df
 
 
@@ -45,8 +77,8 @@ def _should_call_critic(signal_type: str, drift_state: DriftState, parity_state:
 
 
 def run_cycle(bot_state: BotState, trade_log: List[dict]) -> str:
-    df_1h = _load_candle_file(os.path.join('data', 'candles', 'xauusd_1h.parquet'), 'XAU/USD', '1h', 250)
-    df_m15 = _load_candle_file(os.path.join('data', 'candles', 'xauusd_m15.parquet'), 'XAU/USD', '15min', 500)
+    df_1h = _load_candle_file('candles/xauusd_1h.parquet', 'XAU/USD', '1h', 250)
+    df_m15 = _load_candle_file('candles/xauusd_m15.parquet', 'XAU/USD', '15min', 500)
 
     if not fetcher.validate_candles(df_1h) or not fetcher.validate_candles(df_m15):
         signal_text = format_signal(SignalType.NO_TRADE.value, None, None, None, bot_state=bot_state)
@@ -183,8 +215,6 @@ def run_cycle(bot_state: BotState, trade_log: List[dict]) -> str:
         'edge_source': edge_source,
         'e2_oos_trade_count': getattr(bot_state, 'e2_oos_trade_count', 0),
         'phase11_caveat_active': bool(e2_signal and e2_signal.e2_short_suppressed),
-        'formatted_signal_text': signal_text,
-    }
         'drift_severity': drift_state.severity.value,
         'drift_flag_count': len(drift_state.active_flags),
         'drift_flag_types': [flag.flag_type for flag in drift_state.active_flags],

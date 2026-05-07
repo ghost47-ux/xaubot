@@ -11,9 +11,19 @@ logger = logging.getLogger(__name__)
 def assess_risk(signal, bot_state) -> Dict[str, float]:
     dollar_risk_raw = signal.stop_distance * settings.USD_PER_POINT
     dollar_risk_adj = dollar_risk_raw * signal.sizing_factor
-    dollar_target = signal.stop_distance * 1.5 * settings.USD_PER_POINT
+    
+    # Determine RR based on edge source
+    if isinstance(signal, Edge1Signal):
+        rr = settings.E1_RR
+        timeout_hours = settings.E1_TIMEOUT_BARS
+    else:
+        rr = settings.E2_RR
+        # E2 timeframe is M15, so timeout is in 15-min increments
+        # Convert to approximate hours: M15 bars * 15 / 60
+        timeout_hours = int(settings.E2_TIMEOUT_BARS * 0.25)
+    
+    dollar_target = signal.stop_distance * rr * settings.USD_PER_POINT
     account_risk_pct = (dollar_risk_adj / settings.ACCOUNT_BALANCE) * 100
-    rr = 1.5
 
     if dollar_risk_adj <= 2.00:
         risk_flag = 'ACCEPTABLE'
@@ -24,16 +34,12 @@ def assess_risk(signal, bot_state) -> Dict[str, float]:
     else:
         risk_flag = 'REJECTED'
 
-    if isinstance(signal, Edge1Signal):
-        timeout_hours = settings.E1_TIMEOUT_BARS
-    else:
-        timeout_hours = int(settings.E2_TIMEOUT_BARS * 0.25)
-
     logger.info(
-        'At $10 with 0.01 lot fixed: $%s stop = $%s risk = %s%% of account.',
+        'At $10 with 0.01 lot fixed: $%s stop = $%s risk = %s%% of account. RR = %s.',
         signal.stop_distance,
         dollar_risk_adj,
-        round(account_risk_pct, 2)
+        round(account_risk_pct, 2),
+        rr
     )
 
     return {
