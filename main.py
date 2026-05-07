@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import List, Optional
 import logging
 
+import pandas as pd
+
 # Load environment variables from .env file if it exists
 try:
     from dotenv import load_dotenv
@@ -37,12 +39,20 @@ def _get_data_dir() -> Path:
 
 
 def _load_candle_file(path: str, symbol: str, interval: str, n_bars: int):
-    """Load candle data from file or API."""
-    # Use loader which handles caching and API fetching
+    """Load candle data from local file if available, otherwise API."""
+    if os.path.exists(path):
+        try:
+            df = pd.read_parquet(path)
+            if loader.validate_candles(df):
+                return df.tail(n_bars)
+            logger.warning('Local candle file invalid: %s', path)
+        except Exception as exc:
+            logger.warning('Failed to read local candle file %s: %s', path, exc)
+
     df = loader.load_candles(symbol, interval, n_bars)
     if df.empty or not loader.validate_candles(df):
         logger.warning('Invalid or empty candle data for %s %s', symbol, interval)
-        return df  # Return empty to trigger NO_TRADE
+        return df
     return df
 
 
@@ -86,6 +96,11 @@ def run_cycle(bot_state: BotState, trade_log: List[dict], return_metadata: bool 
     bot_state.regime = regime
     if not bot_state.regime_history or bot_state.regime_history[-1].timestamp != regime.timestamp:
         bot_state.regime_history.append(regime)
+
+    bot_state.e2_oos_trade_count = sum(
+        1 for t in trade_log
+        if t.get('edge_source') == 'EDGE2' and t.get('outcome') == 'OOS'
+    )
 
     compression_zones = detect_compression_zones(df_m15)
     e1_signal = detect_edge1(df_1h, current_bar_1h, regime, bot_state)
@@ -134,7 +149,7 @@ def run_cycle(bot_state: BotState, trade_log: List[dict], return_metadata: bool 
 
     drift_state = detect_drift(trade_log, regime, df_1h, current_bar_1h, bot_state.regime_history)
 
-    edge_source = 'BOTH' if e1_signal and e2_signal else 'EDGE 1' if e1_signal else 'EDGE 2' if e2_signal else 'NONE'
+    edge_source = 'BOTH' if e1_signal and e2_signal else 'EDGE1' if e1_signal else 'EDGE2' if e2_signal else 'NONE'
     critic_output = CriticOutput(
         timestamp=datetime.now(timezone.utc),
         critic_called=False,
@@ -236,6 +251,8 @@ def run_cycle(bot_state: BotState, trade_log: List[dict], return_metadata: bool 
     }
 
     log_cycle(log_entry)
+    trade_log.append(log_entry)
+
     if signal_type == SignalType.TRADE.value and (e1_signal or e2_signal):
         if len(trade_log) >= 10:
             metrics = update_performance_metrics(trade_log)

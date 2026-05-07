@@ -23,6 +23,15 @@ def load_logs() -> List[Dict]:
     return entries
 
 
+def filter_logs(logs: List[Dict], signal_type: Optional[str], edge_source: Optional[str]) -> List[Dict]:
+    filtered = logs
+    if signal_type:
+        filtered = [entry for entry in filtered if entry.get('signal_type') == signal_type]
+    if edge_source:
+        filtered = [entry for entry in filtered if entry.get('edge_source') == edge_source]
+    return filtered
+
+
 def _ensure_session_state() -> None:
     if 'bot_state' not in st.session_state:
         st.session_state['bot_state'] = BotState(timestamp=datetime.now(timezone.utc))

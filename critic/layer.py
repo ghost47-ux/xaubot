@@ -11,8 +11,9 @@ from state.models import CriticOutput, DriftState, ParityState, SignalType
 # Decision words that indicate action/recommendation. Must be checked with word boundaries.
 DECISION_WORDS = [
     'take', 'skip', 'avoid', 'recommend', 'suggest', 'should',
-    'enter', 'wait', 'pass', 'reconsider', 'be careful',
-    'i would', 'you might', 'consider'
+    "don't", 'dont', 'enter', 'wait', 'pass', 'hold off',
+    'reconsider', 'think twice', 'be careful', 'caution advised',
+    'i would', 'you might', 'consider', 'perhaps', 'maybe'
 ]
 
 
@@ -105,16 +106,53 @@ def build_critic_context(
         'edge_source': edge_source,
         'e1_signal': e1_signal.__dict__ if e1_signal else None,
         'e2_signal': e2_signal.__dict__ if e2_signal else None,
-        'regime': regime.__dict__ if regime else None,
+        'regime': {
+            'trend_1h': regime.trend_1h.value,
+            'volatility': regime.volatility.value,
+            'session': regime.session.value,
+            'weekday': regime.weekday.name,
+            'ema20': regime.ema20_1h,
+            'ema50': regime.ema50_1h,
+            'ema200': regime.ema200_1h,
+            'atr_1h': regime.atr_1h,
+        } if regime else None,
         'drift_state': {
-            'severity': drift_state.severity.value,
-            'active_flags': [flag.flag_type for flag in drift_state.active_flags],
+            'severity': getattr(drift_state, 'severity', None).value if getattr(drift_state, 'severity', None) else None,
+            'active_flags': [getattr(flag, 'description', str(flag)) for flag in getattr(drift_state, 'active_flags', [])],
+            'e1_rolling_ev': getattr(drift_state, 'e1_rolling_ev', None),
+            'e1_rolling_wr': getattr(drift_state, 'e1_rolling_wr', None),
+            'e2_rolling_ev': getattr(drift_state, 'e2_rolling_ev', None),
+            'e2_rolling_wr': getattr(drift_state, 'e2_rolling_wr', None),
+            'e1_consecutive_losses': getattr(drift_state, 'e1_consecutive_losses', None),
+            'e2_consecutive_losses': getattr(drift_state, 'e2_consecutive_losses', None),
+            'volatility_outside_backtest': getattr(drift_state, 'volatility_outside_backtest', None),
+            'regime_choppy': getattr(drift_state, 'regime_choppy', None),
+        } if drift_state else None,
+        'drift': {
+            'severity': getattr(drift_state, 'severity', None).value if getattr(drift_state, 'severity', None) else None,
+            'active_flags': [getattr(flag, 'description', str(flag)) for flag in getattr(drift_state, 'active_flags', [])],
+            'e1_rolling_ev': getattr(drift_state, 'e1_rolling_ev', None),
+            'e1_rolling_wr': getattr(drift_state, 'e1_rolling_wr', None),
+            'e2_rolling_ev': getattr(drift_state, 'e2_rolling_ev', None),
+            'e2_rolling_wr': getattr(drift_state, 'e2_rolling_wr', None),
+            'e1_consecutive_losses': getattr(drift_state, 'e1_consecutive_losses', None),
+            'e2_consecutive_losses': getattr(drift_state, 'e2_consecutive_losses', None),
+            'volatility_outside_backtest': getattr(drift_state, 'volatility_outside_backtest', None),
+            'regime_choppy': getattr(drift_state, 'regime_choppy', None),
         } if drift_state else None,
         'parity_state': {
-            'status': parity_state.status.value,
-            'failed_checks': parity_state.failed_checks,
+            'status': getattr(parity_state, 'status', None).value if getattr(parity_state, 'status', None) else None,
+            'failed_checks': getattr(parity_state, 'failed_checks', []),
+            'missing_candles_1h': getattr(parity_state, 'missing_candles_1h', None),
+            'missing_candles_m15': getattr(parity_state, 'missing_candles_m15', None),
         } if parity_state else None,
-        'recent_logs': recent_logs,
+        'parity': {
+            'status': getattr(parity_state, 'status', None).value if getattr(parity_state, 'status', None) else None,
+            'failed_checks': getattr(parity_state, 'failed_checks', []),
+            'missing_candles_1h': getattr(parity_state, 'missing_candles_1h', None),
+            'missing_candles_m15': getattr(parity_state, 'missing_candles_m15', None),
+        } if parity_state else None,
+        'recent_trades': recent_logs[-10:],
     }
 
 
